@@ -16,7 +16,8 @@ export interface ParsedWhereClause {
 export type ComparisonOperator = 
   | 'eq' | 'ne' | 'gt' | 'gte' | 'lt' | 'lte'
   | 'in' | 'nin' | 'like' | 'nlike' | 'regex' | 'nregex'
-  | 'exists' | 'nexists' | 'between' | 'nbetween';
+  | 'exists' | 'nexists' | 'between' | 'nbetween'
+  | 'json_extract' | 'json_path' | 'full_text_search' | 'array_contains' | 'text_search';
 
 /**
  * WHERE clause parser for SQL queries
@@ -24,8 +25,14 @@ export type ComparisonOperator =
 export class SqlWhereParser {
   private _fieldMappings: Map<string, SqlFieldMapping> = new Map();
   private _tableAlias?: string;
+  private _databaseType: 'mysql' | 'postgresql' | 'sqlite';
 
-  constructor(fieldMappings?: SqlFieldMapping[], tableAlias?: string) {
+  constructor(
+    databaseType: 'mysql' | 'postgresql' | 'sqlite' = 'mysql',
+    fieldMappings?: SqlFieldMapping[], 
+    tableAlias?: string
+  ) {
+    this._databaseType = databaseType;
     if (fieldMappings) {
       this.setFieldMappings(fieldMappings);
     }
@@ -204,6 +211,7 @@ export class SqlWhereParser {
         // For LIKE operator, use the pattern as-is (it's already a SQL LIKE pattern)
         params.push(value);
         return `${fieldRef} LIKE ?`;
+
       default:
         params.push(value);
         return `${fieldRef} = ?`;
@@ -373,6 +381,16 @@ export class SqlWhereParser {
         return this._buildBetweenCondition(fieldRef, value, params, false);
       case 'nbetween':
         return this._buildBetweenCondition(fieldRef, value, params, true);
+      case 'json_extract':
+        return this._createJsonExtractCondition(field, value.path, value.value, params);
+      case 'json_path':
+        return this._createJsonPathCondition(field, value, params);
+      case 'full_text_search':
+        return this._createFullTextSearchCondition(field, value.value, params);
+      case 'array_contains':
+        return this._createArrayContainsCondition(field, value.values, params);
+      case 'text_search':
+        return this._createTextSearchCondition(field, value.value, params);
       default:
         return null;
     }
@@ -494,10 +512,107 @@ export class SqlWhereParser {
   }
 
   /**
+   * Creates a JSON_EXTRACT condition for extracting values from JSON fields
+   */
+  private _createJsonExtractCondition(field: string, path: string, value: any, params: any[]): string {
+    const fieldRef = this._getFieldReference(field);
+    
+    switch (this._databaseType) {
+      case 'postgresql':
+        params.push(value);
+        return `${fieldRef}->>'${path}' = ?`;
+      case 'mysql':
+        params.push(value);
+        return `JSON_EXTRACT(${fieldRef}, '${path}') = ?`;
+      case 'sqlite':
+        params.push(value);
+        return `json_extract(${fieldRef}, '${path}') = ?`;
+      default:
+        params.push(value);
+        return `${fieldRef} = ?`;
+    }
+  }
+
+  /**
+   * Creates a JSON path condition for PostgreSQL JSON operators
+   */
+  private _createJsonPathCondition(field: string, path: string, params: any[]): string {
+    const fieldRef = this._getFieldReference(field);
+    
+    if (this._databaseType === 'postgresql') {
+      return `${fieldRef} @> ?`;
+    } else {
+      // Fallback to JSON_EXTRACT for other databases
+      return this._createJsonExtractCondition(field, path, null, params);
+    }
+  }
+
+  /**
+   * Creates a full-text search condition
+   */
+  private _createFullTextSearchCondition(field: string, searchTerm: string, params: any[]): string {
+    const fieldRef = this._getFieldReference(field);
+    
+    switch (this._databaseType) {
+      case 'postgresql':
+        params.push(searchTerm);
+        return `to_tsvector('english', ${fieldRef}) @@ plainto_tsquery('english', ?)`;
+      case 'mysql':
+        params.push(searchTerm);
+        return `MATCH(${fieldRef}) AGAINST(? IN BOOLEAN MODE)`;
+      case 'sqlite':
+        params.push(searchTerm);
+        return `${fieldRef} MATCH ?`;
+      default:
+        params.push(searchTerm);
+        return `${fieldRef} LIKE ?`;
+    }
+  }
+
+  /**
+   * Creates an array contains condition
+   */
+  private _createArrayContainsCondition(field: string, values: any[], params: any[]): string {
+    const fieldRef = this._getFieldReference(field);
+    
+    switch (this._databaseType) {
+      case 'postgresql':
+        params.push(values);
+        return `${fieldRef} @> ?`;
+      case 'mysql':
+        params.push(JSON.stringify(values));
+        return `JSON_CONTAINS(${fieldRef}, ?)`;
+      case 'sqlite':
+        // SQLite doesn't have native array support, use JSON
+        params.push(JSON.stringify(values));
+        return `json_extract(${fieldRef}, '$') = ?`;
+      default:
+        // Fallback to IN operator
+        if (!Array.isArray(values) || values.length === 0) {
+          return '1=0';
+        }
+        const placeholders = values.map(() => '?').join(', ');
+        params.push(...values);
+        return `${fieldRef} IN (${placeholders})`;
+    }
+  }
+
+  /**
+   * Creates a text search condition (simpler than full-text search)
+   */
+  private _createTextSearchCondition(field: string, searchTerm: string, params: any[]): string {
+    const fieldRef = this._getFieldReference(field);
+    
+    // Simple text search using LIKE with wildcards
+    params.push(`%${searchTerm}%`);
+    return `${fieldRef} LIKE ?`;
+  }
+
+  /**
    * Builds a complete WHERE clause from criteria
    */
   static buildWhereClause(criteria: any, fieldMappings?: SqlFieldMapping[], tableAlias?: string): ParsedWhereClause {
-    const parser = new SqlWhereParser(fieldMappings, tableAlias);
+    const parser = new SqlWhereParser('mysql', fieldMappings, tableAlias);
     return parser.parse(criteria);
   }
 
@@ -507,7 +622,7 @@ export class SqlWhereParser {
    * @returns {ParsedWhereClause} The parsed WHERE clause.
    */
   static parse(where: Where | any): ParsedWhereClause {
-    const parser = new SqlWhereParser();
+    const parser = new SqlWhereParser('mysql');
     return parser.parse(where);
   }
 }

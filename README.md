@@ -453,7 +453,7 @@ console.log('Slow Queries:', slowQueries);
 ```typescript
 // JSON operations
 const jsonQuery = new Where()
-  .valueOf('profile').jsonPath('$.preferences.theme').isEq('dark');
+  .valueOf('profile').jsonExtract('$.preferences.theme').isEq('dark');
 
 // Full-text search
 const searchQuery = new Where()
@@ -490,6 +490,77 @@ const jsonQuery = new Where()
   .valueOf('profile').jsonExtract('$.preferences.theme').isEq('dark');
 ```
 
+## Extended Operators
+
+The package supports advanced operators for specific database features:
+
+### JSON Operations
+
+```typescript
+// Extract values from JSON fields
+const jsonQuery = {
+  profile: { 
+    jsonExtract: { 
+      path: '$.preferences.theme', 
+      value: 'dark' 
+    } 
+  }
+};
+
+// PostgreSQL: profile->>'$.preferences.theme' = ?
+// MySQL: JSON_EXTRACT(profile, '$.preferences.theme') = ?
+// SQLite: json_extract(profile, '$.preferences.theme') = ?
+```
+
+### Full-Text Search
+
+```typescript
+// Full-text search across different databases
+const searchQuery = {
+  content: { 
+    fullTextSearch: { 
+      value: 'search term' 
+    } 
+  }
+};
+
+// PostgreSQL: to_tsvector('english', content) @@ plainto_tsquery('english', ?)
+// MySQL: MATCH(content) AGAINST(? IN BOOLEAN MODE)
+// SQLite: content MATCH ?
+```
+
+### Array Operations
+
+```typescript
+// Check if array contains specific values
+const arrayQuery = {
+  tags: { 
+    arrayContains: { 
+      values: ['important', 'urgent'] 
+    } 
+  }
+};
+
+// PostgreSQL: tags @> ?
+// MySQL: JSON_CONTAINS(tags, ?)
+// SQLite: json_extract(tags, '$') = ?
+```
+
+### Text Search
+
+```typescript
+// Simple text search with wildcards
+const textQuery = {
+  name: { 
+    textSearch: { 
+      value: 'John' 
+    } 
+  }
+};
+
+// All databases: name LIKE '%John%'
+```
+
 ## API Reference
 
 ### Core Classes
@@ -517,6 +588,14 @@ const jsonQuery = new Where()
 - **MigrationResult**: Result of migration operations
 - **SqlPerformanceMetrics**: Performance metrics for operations
 - **SqlPerformanceSummary**: Summary statistics for performance monitoring
+
+### Extended Operators
+
+- **jsonExtract**: Extract values from JSON fields using JSON path expressions
+- **jsonPath**: PostgreSQL-specific JSON path operations
+- **fullTextSearch**: Database-specific full-text search capabilities
+- **arrayContains**: Check if arrays contain specific values
+- **textSearch**: Simple text search with wildcards
 
 ## Error Handling
 

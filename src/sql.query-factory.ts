@@ -23,7 +23,7 @@ export class SqlQueryFactory<T> implements DbQueryFactory {
   private whereParser: SqlWhereParser;
 
   constructor(private databaseType: DatabaseType) {
-    this.whereParser = new SqlWhereParser();
+    this.whereParser = new SqlWhereParser(this.databaseType);
   }
 
   /**

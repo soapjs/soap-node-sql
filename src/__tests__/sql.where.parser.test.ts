@@ -6,7 +6,7 @@ describe('SqlWhereParser', () => {
   let parser: SqlWhereParser;
 
   beforeEach(() => {
-    parser = new SqlWhereParser();
+    parser = new SqlWhereParser('mysql');
   });
 
   describe('constructor and configuration', () => {
@@ -19,12 +19,12 @@ describe('SqlWhereParser', () => {
         { name: 'user_id', type: 'number', nullable: false },
         { name: 'email', type: 'string', nullable: true }
       ];
-      const parserWithMappings = new SqlWhereParser(fieldMappings);
+      const parserWithMappings = new SqlWhereParser('mysql', fieldMappings);
       expect(parserWithMappings).toBeInstanceOf(SqlWhereParser);
     });
 
     it('should create parser with table alias', () => {
-      const parserWithAlias = new SqlWhereParser(undefined, 'users');
+      const parserWithAlias = new SqlWhereParser('mysql', undefined, 'users');
       expect(parserWithAlias).toBeInstanceOf(SqlWhereParser);
     });
 
@@ -338,14 +338,14 @@ describe('SqlWhereParser', () => {
 
   describe('table alias support', () => {
     it('should include table alias in field references', () => {
-      const parserWithAlias = new SqlWhereParser(undefined, 'users');
+      const parserWithAlias = new SqlWhereParser('mysql', undefined, 'users');
       const result = parserWithAlias.parse({ name: 'John' });
       expect(result.sql).toBe('WHERE users.`name` = ?');
       expect(result.params).toEqual(['John']);
     });
 
     it('should include table alias in complex conditions', () => {
-      const parserWithAlias = new SqlWhereParser(undefined, 'products');
+      const parserWithAlias = new SqlWhereParser('mysql', undefined, 'products');
       const result = parserWithAlias.parse({
         price: { between: [10, 100] },
         category: { in: ['electronics', 'books'] }
@@ -361,7 +361,7 @@ describe('SqlWhereParser', () => {
         { name: 'user_id', type: 'number', nullable: false },
         { name: 'email', type: 'string', nullable: true }
       ];
-      const parserWithMappings = new SqlWhereParser(fieldMappings);
+      const parserWithMappings = new SqlWhereParser('mysql', fieldMappings);
       const result = parserWithMappings.parse({ user_id: 123, email: 'test@example.com' });
       expect(result.sql).toBe('WHERE `user_id` = ? AND `email` = ?');
       expect(result.params).toEqual([123, 'test@example.com']);
@@ -612,6 +612,96 @@ describe('SqlWhereParser', () => {
       expect(result.sql).toBe('WHERE `name` = ? AND `age` = ?');
       expect(result.params).toEqual(['John', 25]);
       expect(result.hasConditions).toBe(true);
+    });
+  });
+
+  describe('extended operators', () => {
+          describe('json_extract operator', () => {
+      it('should parse json_extract for MySQL', () => {
+        const mysqlParser = new SqlWhereParser('mysql');
+        const result = mysqlParser.parse({ profile: { json_extract: { path: '$.preferences.theme', value: 'dark' } } });
+        expect(result.sql).toBe('WHERE JSON_EXTRACT(`profile`, \'$.preferences.theme\') = ?');
+        expect(result.params).toEqual(['dark']);
+        expect(result.hasConditions).toBe(true);
+      });
+
+      it('should parse json_extract for PostgreSQL', () => {
+        const pgParser = new SqlWhereParser('postgresql');
+        const result = pgParser.parse({ profile: { json_extract: { path: '$.preferences.theme', value: 'dark' } } });
+        expect(result.sql).toBe('WHERE `profile`->>\'$.preferences.theme\' = ?');
+        expect(result.params).toEqual(['dark']);
+        expect(result.hasConditions).toBe(true);
+      });
+
+      it('should parse json_extract for SQLite', () => {
+        const sqliteParser = new SqlWhereParser('sqlite');
+        const result = sqliteParser.parse({ profile: { json_extract: { path: '$.preferences.theme', value: 'dark' } } });
+        expect(result.sql).toBe('WHERE json_extract(`profile`, \'$.preferences.theme\') = ?');
+        expect(result.params).toEqual(['dark']);
+        expect(result.hasConditions).toBe(true);
+      });
+    });
+
+          describe('full_text_search operator', () => {
+        it('should parse full_text_search for MySQL', () => {
+          const mysqlParser = new SqlWhereParser('mysql');
+          const result = mysqlParser.parse({ content: { full_text_search: { value: 'search term' } } });
+          expect(result.sql).toBe('WHERE MATCH(`content`) AGAINST(? IN BOOLEAN MODE)');
+          expect(result.params).toEqual(['search term']);
+          expect(result.hasConditions).toBe(true);
+        });
+
+              it('should parse full_text_search for PostgreSQL', () => {
+          const pgParser = new SqlWhereParser('postgresql');
+          const result = pgParser.parse({ content: { full_text_search: { value: 'search term' } } });
+          expect(result.sql).toBe('WHERE to_tsvector(\'english\', `content`) @@ plainto_tsquery(\'english\', ?)');
+          expect(result.params).toEqual(['search term']);
+          expect(result.hasConditions).toBe(true);
+        });
+
+              it('should parse full_text_search for SQLite', () => {
+          const sqliteParser = new SqlWhereParser('sqlite');
+          const result = sqliteParser.parse({ content: { full_text_search: { value: 'search term' } } });
+          expect(result.sql).toBe('WHERE `content` MATCH ?');
+          expect(result.params).toEqual(['search term']);
+          expect(result.hasConditions).toBe(true);
+        });
+    });
+
+          describe('array_contains operator', () => {
+        it('should parse array_contains for MySQL', () => {
+          const mysqlParser = new SqlWhereParser('mysql');
+          const result = mysqlParser.parse({ tags: { array_contains: { values: ['important', 'urgent'] } } });
+          expect(result.sql).toBe('WHERE JSON_CONTAINS(`tags`, ?)');
+          expect(result.params).toEqual(['["important","urgent"]']);
+          expect(result.hasConditions).toBe(true);
+        });
+
+              it('should parse array_contains for PostgreSQL', () => {
+          const pgParser = new SqlWhereParser('postgresql');
+          const result = pgParser.parse({ tags: { array_contains: { values: ['important', 'urgent'] } } });
+          expect(result.sql).toBe('WHERE `tags` @> ?');
+          expect(result.params).toEqual([['important', 'urgent']]);
+          expect(result.hasConditions).toBe(true);
+        });
+
+              it('should parse array_contains for SQLite', () => {
+          const sqliteParser = new SqlWhereParser('sqlite');
+          const result = sqliteParser.parse({ tags: { array_contains: { values: ['important', 'urgent'] } } });
+          expect(result.sql).toBe('WHERE json_extract(`tags`, \'$\') = ?');
+          expect(result.params).toEqual(['["important","urgent"]']);
+          expect(result.hasConditions).toBe(true);
+        });
+    });
+
+          describe('text_search operator', () => {
+        it('should parse text_search for all databases', () => {
+          const mysqlParser = new SqlWhereParser('mysql');
+          const result = mysqlParser.parse({ name: { text_search: { value: 'John' } } });
+          expect(result.sql).toBe('WHERE `name` LIKE ?');
+          expect(result.params).toEqual(['%John%']);
+          expect(result.hasConditions).toBe(true);
+        });
     });
   });
 });
