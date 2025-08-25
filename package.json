@@ -1,0 +1,48 @@
+{
+  "name": "@soapjs/soap-node-sql",
+  "version": "0.1.0",
+  "description": "Seamless SQL integration for SoapJS projects, facilitating clean architecture practices and streamlined database interactions.",
+  "homepage": "https://docs.soapjs.com",
+  "repository": "https://github.com/soapjs/soap-node-sql",
+  "main": "build/index.js",
+  "types": "build/index.d.ts",
+  "license": "MIT",
+  "author": "Radoslaw Kamysz",
+  "scripts": {
+    "test:unit": "jest --config=jest.config.unit.json",
+    "test:integration": "jest --config=jest.config.integration.json",
+    "test": "npm run test:unit && npm run test:integration",
+    "clean": "rm -rf ./build",
+    "build": "npm run clean && tsc -b",
+    "prepublish": "npm run clean && tsc --project tsconfig.build.json"
+  },
+  "devDependencies": {
+    "@testcontainers/mysql": "^10.28.0",
+    "@testcontainers/postgresql": "^10.28.0",
+    "@types/jest": "^27.0.3",
+    "@types/node": "^18.7.14",
+    "@types/pg": "^8.15.5",
+    "@web-std/file": "^3.0.3",
+    "jest": "^27.4.5",
+    "mysql2": "^3.0.0",
+    "pg": "^8.0.0",
+    "reflect-metadata": "^0.2.2",
+    "testcontainers": "^10.28.0",
+    "ts-jest": "^27.1.3",
+    "ts-node": "^10.9.2",
+    "typescript": "^4.8.2"
+  },
+  "peerDependencies": {
+    "@soapjs/soap": "file:../soap/soapjs-soap-0.5.12.tgz",
+    "mysql2": "^3.0.0",
+    "pg": "^8.0.0"
+  },
+  "optionalDependencies": {
+    "mysql2": "^3.0.0",
+    "pg": "^8.0.0"
+  },
+  "dependencies": {
+    "@types/sqlite3": "^5.1.0",
+    "sqlite3": "^5.1.7"
+  }
+}
