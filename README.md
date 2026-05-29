@@ -8,6 +8,7 @@ This package provides SQL database integration for the SoapJS framework, support
 - **Clean Architecture Support**: Follows SoapJS clean architecture patterns with full abstraction support
 - **Type Safety**: Full TypeScript support with comprehensive type definitions
 - **Source Implementation**: Full implementation of Source interface for SQL databases
+- **Native Queries**: Escape hatch (`Source.native()`) for raw SQL / `RepositoryQuery`
 - **Transaction Support**: Full support for SQL transactions with SOAPJS transaction system
 - **Query Builder**: Advanced query building with Where conditions and QueryBuilder support
 - **Field Mapping**: Flexible field mapping between domain entities and database tables
@@ -279,6 +280,33 @@ const aggregationResult = await userRepo.aggregate({
   having: { count: { $gte: 5 } }
 });
 ```
+
+#### Native Queries
+
+When the abstraction can't express a query (vendor-specific SQL, complex joins,
+CTEs), drop to a native query via `Source.native()` — pass a raw SQL string, a
+`{ sql, params }` payload, or a named `RepositoryQuery`:
+
+```typescript
+import { RepositoryQuery } from '@soapjs/soap';
+
+// Raw SQL
+const rows = await userSource.native('SELECT * FROM users ORDER BY created_at DESC');
+
+// With params
+const active = await userSource.native({ sql: 'SELECT * FROM users WHERE status = ?', params: ['active'] });
+
+// As a named, reusable RepositoryQuery
+class TopDepartmentsQuery extends RepositoryQuery<{ sql: string; params: any[] }> {
+  build() {
+    return { sql: 'SELECT department, COUNT(*) n FROM users GROUP BY department ORDER BY n DESC LIMIT 5', params: [] };
+  }
+}
+const top = await userSource.native(new TopDepartmentsQuery());
+```
+
+`native()` runs the query verbatim and returns the raw rows, bypassing the query
+factory and the mapper. Available since `@soapjs/soap` 0.10 / this package 0.2.
 
 ### 7. Transaction Support
 

@@ -5,6 +5,7 @@ import { SqlQueryFactory } from '../sql.query-factory';
 import { SqlFieldResolver } from '../sql.field-resolver';
 import { SqlTransformers } from '../sql.transformers';
 import { SqlQueryError, SqlConnectionError } from '../sql.errors';
+import { RepositoryQuery } from '@soapjs/soap';
 
 // Mock dependencies
 jest.mock('../soap.sql');
@@ -438,6 +439,45 @@ describe('SqlDataSource', () => {
       const result = await dataSource.aggregate(query);
 
       expect(result).toEqual([{ total: 100 }]);
+    });
+  });
+
+  describe('native', () => {
+    it('runs a raw SQL string and returns the rows', async () => {
+      mockSoapSql.query.mockResolvedValue({ rows: [{ id: 1, title: 'A' }], rowCount: 1 });
+
+      const rows = await dataSource.native<any[]>('SELECT * FROM comics');
+
+      expect(mockSoapSql.query).toHaveBeenCalledWith('SELECT * FROM comics', undefined);
+      expect(rows).toEqual([{ id: 1, title: 'A' }]);
+    });
+
+    it('runs a { sql, params } payload', async () => {
+      mockSoapSql.query.mockResolvedValue({ rows: [{ id: 2 }], rowCount: 1 });
+
+      const rows = await dataSource.native<any[]>({ sql: 'SELECT * FROM comics WHERE id = ?', params: [2] });
+
+      expect(mockSoapSql.query).toHaveBeenCalledWith('SELECT * FROM comics WHERE id = ?', [2]);
+      expect(rows).toEqual([{ id: 2 }]);
+    });
+
+    it('resolves a RepositoryQuery via build()', async () => {
+      mockSoapSql.query.mockResolvedValue({ rows: [{ n: 3 }], rowCount: 1 });
+
+      class StatsQuery extends RepositoryQuery<{ sql: string; params: any[] }> {
+        build() {
+          return { sql: 'SELECT COUNT(*) n FROM comics', params: [] };
+        }
+      }
+
+      const rows = await dataSource.native<any[]>(new StatsQuery());
+
+      expect(mockSoapSql.query).toHaveBeenCalledWith('SELECT COUNT(*) n FROM comics', []);
+      expect(rows).toEqual([{ n: 3 }]);
+    });
+
+    it('throws on an unrecognized payload', async () => {
+      await expect(dataSource.native({ foo: 1 } as any)).rejects.toThrow(SqlQueryError);
     });
   });
 

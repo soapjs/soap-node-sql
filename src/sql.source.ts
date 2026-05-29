@@ -1,4 +1,4 @@
-import { Source, DatabaseSession, DbQuery } from '@soapjs/soap';
+import { Source, DatabaseSession, DbQuery, RepositoryQuery } from '@soapjs/soap';
 import { SoapSQL } from './soap.sql';
 import { SqlQueryFactory } from './sql.query-factory';
 import { SqlFieldResolver } from './sql.field-resolver';
@@ -278,6 +278,42 @@ export class SqlDataSource<T> implements Source<T> {
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       throw new SqlQueryError(`Aggregate operation failed: ${errorMessage}`, errorMessage);
+    }
+  }
+
+  /**
+   * Sanctioned escape hatch — runs a NATIVE SQL query the abstract API can't
+   * express. The payload is produced by a {@link RepositoryQuery}'s `build()`
+   * (or passed raw) as either a SQL string or `{ sql, params?, options? }`, and
+   * is executed verbatim. Returns the raw rows (use the lower-level `query()`
+   * directly if you need the full QueryResult metadata).
+   */
+  async native<ResultType = T[]>(query: DbQuery | RepositoryQuery): Promise<ResultType> {
+    try {
+      const payload: any = RepositoryQuery.isQueryBuilder(query) ? query.build() : query;
+
+      let sql: string;
+      let params: any[] | undefined;
+      let options: QueryOptions | undefined;
+
+      if (typeof payload === 'string') {
+        sql = payload;
+      } else if (payload && typeof payload.sql === 'string') {
+        sql = payload.sql;
+        params = payload.params;
+        options = payload.options;
+      } else {
+        throw new SqlQueryError(
+          'native() expects a SQL string or { sql, params?, options? }',
+          'invalid native query',
+        );
+      }
+
+      const result = await this.query(sql, params, options);
+      return result.data as ResultType;
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      throw new SqlQueryError(`Native query failed: ${errorMessage}`, errorMessage);
     }
   }
 
