@@ -807,4 +807,101 @@ describe('SqlDataSource', () => {
       expect(dataSource.collectionName).toBe('test_collection');
     });
   });
+
+  // Regression — SqlDataSource must route soap-native params (FindParams /
+  // CountParams / UpdateParams / RemoveParams / RepositoryQuery) through the
+  // SqlQueryFactory's `createXxxQuery` family so the `Where` instance is parsed
+  // by SqlWhereParser. The legacy `buildXxxQuery` path passes the `Where`
+  // instance straight to `buildWhereClause`, which only understands plain
+  // objects → empty WHERE → returns every row, or deletes every row.
+  //
+  // Detection is by presence of a `Where` instance (`.build()`) on `where` —
+  // NOT by the loose `FindParams.isFindParams` guard, which also matches the
+  // legacy DbQuery `{ collection, criteria, options }` shape.
+  describe('soap params routing', () => {
+    const fakeBuilt = { sql: 'SELECT 1', params: [] };
+    const fakeWhere = { build: () => ({ left: 'x', operator: 'eq', right: 1 }) };
+
+    beforeEach(() => {
+      mockSoapSql.query.mockResolvedValue({ rows: [{ id: 1 }], rowCount: 1, affectedRows: 1 });
+    });
+
+    it('find() with a Where instance routes through createFindQuery', async () => {
+      mockQueryFactory.createFindQuery = jest.fn().mockReturnValue(fakeBuilt) as any;
+      const params: any = { limit: 10, offset: 0, where: fakeWhere };
+
+      await dataSource.find(params);
+
+      expect(mockQueryFactory.createFindQuery).toHaveBeenCalledWith(params, 'test_collection');
+      expect(mockSoapSql.query).toHaveBeenCalledWith(fakeBuilt.sql, fakeBuilt.params);
+    });
+
+    it('count() with a Where instance routes through createCountQuery', async () => {
+      mockQueryFactory.createCountQuery = jest.fn().mockReturnValue(fakeBuilt) as any;
+      mockSoapSql.query.mockResolvedValue([{ count: '7' }]);
+      const params: any = { where: fakeWhere, sort: { id: 1 } };
+
+      const result = await dataSource.count(params);
+
+      expect(mockQueryFactory.createCountQuery).toHaveBeenCalledWith(params, 'test_collection');
+      expect(result).toBe(7);
+    });
+
+    it('update() with { updates, where[], methods[] } routes through createUpdateQuery', async () => {
+      mockQueryFactory.createUpdateQuery = jest.fn().mockReturnValue(fakeBuilt) as any;
+      const query = { updates: [{ name: 'x' }], where: [fakeWhere], methods: [0] };
+
+      const result = await dataSource.update(query as any);
+
+      expect(mockQueryFactory.createUpdateQuery).toHaveBeenCalledWith(query.updates, query.where, query.methods, 'test_collection');
+      expect(result).toEqual({ modifiedCount: 1, upsertedCount: 0, matchedCount: 1 });
+    });
+
+    it('remove() with a Where instance routes through createRemoveQuery', async () => {
+      mockQueryFactory.createRemoveQuery = jest.fn().mockReturnValue(fakeBuilt) as any;
+      const params: any = { where: fakeWhere };
+
+      const result = await dataSource.remove(params);
+
+      expect(mockQueryFactory.createRemoveQuery).toHaveBeenCalledWith(params, 'test_collection');
+      expect(result.deletedCount).toBe(1);
+    });
+
+    it('aggregate() with AggregationParams shape routes through createAggregationQuery', async () => {
+      mockQueryFactory.createAggregationQuery = jest.fn().mockReturnValue(fakeBuilt) as any;
+      mockSoapSql.query.mockResolvedValue({ rows: [{ id: 1 }], rowCount: 1 });
+      const params: any = { groupBy: ['publisher'], count: 'id' };
+
+      const result = await dataSource.aggregate(params);
+
+      expect(mockQueryFactory.createAggregationQuery).toHaveBeenCalledWith(params, 'test_collection');
+      expect(result).toEqual([{ id: 1 }]);
+    });
+
+    it('find() unwraps RepositoryQuery via build() and re-dispatches', async () => {
+      const repoQuery = new (class extends RepositoryQuery<any> {
+        build() {
+          return { sql: 'SELECT 42', params: [] };
+        }
+      })();
+
+      await dataSource.find(repoQuery as any);
+
+      expect(mockSoapSql.query).toHaveBeenCalledWith('SELECT 42', []);
+    });
+
+    it('find() with a legacy { collection, criteria } shape still uses buildFindQuery (NO Where instance)', async () => {
+      // Critical: the new soap-params detection must NOT swallow the legacy
+      // DbQuery shape. `where` here is a plain object, not a `Where`.
+      mockQueryFactory.buildFindQuery.mockReturnValue(fakeBuilt as any);
+      const createFindQuerySpy = jest.fn();
+      (mockQueryFactory as any).createFindQuery = createFindQuerySpy;
+      const legacy = { collection: 'test_collection', criteria: { id: 1 }, options: {} };
+
+      await dataSource.find(legacy as any);
+
+      expect(mockQueryFactory.buildFindQuery).toHaveBeenCalled();
+      expect(createFindQuerySpy).not.toHaveBeenCalled();
+    });
+  });
 });

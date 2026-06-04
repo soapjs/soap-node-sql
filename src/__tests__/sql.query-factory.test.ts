@@ -284,4 +284,45 @@ describe('SqlQueryFactory', () => {
       expect(result).toBe('mysql');
     });
   });
+
+  // Regression: SqlWhereParser prepends "WHERE " to its parsed sql. Earlier
+  // versions of the builder passed that through verbatim, which produced
+  // double "WHERE WHERE …" and Postgres complained with a syntax error.
+  // resolveClause must strip the prefix once, regardless of casing.
+  describe('resolveClause WHERE-prefix stripping (regression)', () => {
+    it('should strip a leading "WHERE " from pre-parsed clauses', () => {
+      mockWhereParser.parse.mockReturnValue({
+        sql: 'WHERE publisher = ? AND role = ?',
+        params: ['marvel', 'writer'],
+        hasConditions: true,
+      } as any);
+
+      const where = new Where();
+      where.valueOf('publisher').isEq('marvel');
+      const findParams = new FindParams(undefined, undefined, undefined, where);
+
+      const result = queryFactory.createFindQuery(findParams, 'authors');
+      const sql = (result as any).sql as string;
+
+      // exactly one WHERE, immediately followed by the expression
+      const matches = sql.match(/WHERE/gi) || [];
+      expect(matches.length).toBe(1);
+      expect(sql).toContain('WHERE publisher = ? AND role = ?');
+      expect((result as any).params).toEqual(['marvel', 'writer']);
+    });
+
+    it('should drop tautological pre-parsed clauses (1=1) to avoid an empty WHERE', () => {
+      mockWhereParser.parse.mockReturnValue({
+        sql: 'WHERE 1 = 1',
+        params: [],
+        hasConditions: false,
+      } as any);
+
+      const where = new Where();
+      const findParams = new FindParams(undefined, undefined, undefined, where);
+
+      const result = queryFactory.createFindQuery(findParams, 'authors');
+      expect((result as any).sql).not.toMatch(/WHERE/i);
+    });
+  });
 });

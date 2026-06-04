@@ -215,8 +215,6 @@ export class SqlUtils {
    * Builds a WHERE clause from an object
    */
   static buildWhereClause(conditions: Record<string, any>, databaseType: DatabaseType): { sql: string; params: any[] } {
-    console.log('🔍 buildWhereClause called with:', { conditions, databaseType });
-    
     const clauses: string[] = [];
     const params: any[] = [];
     
@@ -286,8 +284,6 @@ export class SqlUtils {
     }
     
     const sql = clauses.length > 0 ? clauses.join(' AND ') : '1 = 1';
-    console.log('🔍 buildWhereClause result:', { sql, params });
-    
     return { sql, params };
   }
 
@@ -310,19 +306,19 @@ export class SqlUtils {
   /**
    * Builds a LIMIT clause
    */
+  /**
+   * Builds the LIMIT/OFFSET clause. Uses the SQL-standard `LIMIT N OFFSET M`
+   * form, which is supported by PostgreSQL, MySQL 5.0+ and SQLite alike. The
+   * previous MySQL-only `LIMIT offset, limit` form blew up on Postgres with
+   * "LIMIT #,# syntax is not supported".
+   *
+   * A lone OFFSET without LIMIT is dropped — MySQL rejects it, and it's almost
+   * never what you want anyway (returns everything past the offset).
+   */
   static buildLimitClause(limit?: number, offset?: number): string {
-    if (limit === undefined && offset === undefined) {
-      return '';
-    }
-    
-    if (offset !== undefined && limit !== undefined) {
-      return `LIMIT ${offset}, ${limit}`;
-    }
-    
-    if (limit !== undefined) {
-      return `LIMIT ${limit}`;
-    }
-    
-    return '';
+    if (limit === undefined) return '';
+    let clause = `LIMIT ${limit}`;
+    if (offset !== undefined && offset > 0) clause += ` OFFSET ${offset}`;
+    return clause;
   }
 }

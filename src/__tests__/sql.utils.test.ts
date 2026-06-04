@@ -429,6 +429,9 @@ describe('SqlUtils', () => {
   });
 
   describe('buildLimitClause', () => {
+    // 0.2.1 — switched from MySQL-only `LIMIT offset, limit` to SQL-standard
+    // `LIMIT N OFFSET M`, which is what Postgres needs ("LIMIT #,# syntax is
+    // not supported"). MySQL 5.0+ and SQLite accept the standard form too.
     it('should return empty string when no limit or offset', () => {
       expect(SqlUtils.buildLimitClause()).toBe('');
       expect(SqlUtils.buildLimitClause(undefined, undefined)).toBe('');
@@ -439,18 +442,21 @@ describe('SqlUtils', () => {
       expect(SqlUtils.buildLimitClause(100)).toBe('LIMIT 100');
     });
 
-    it('should build LIMIT clause with limit and offset', () => {
-      expect(SqlUtils.buildLimitClause(10, 20)).toBe('LIMIT 20, 10');
-      expect(SqlUtils.buildLimitClause(5, 0)).toBe('LIMIT 0, 5');
+    it('should build LIMIT + OFFSET clause when offset is positive', () => {
+      expect(SqlUtils.buildLimitClause(10, 20)).toBe('LIMIT 10 OFFSET 20');
+      // offset === 0 is a no-op; we drop the OFFSET to keep the SQL clean.
+      expect(SqlUtils.buildLimitClause(5, 0)).toBe('LIMIT 5');
     });
 
     it('should handle offset without limit', () => {
+      // Without a LIMIT we drop the clause entirely — MySQL rejects lone OFFSET
+      // and it's almost never what the caller actually wants.
       expect(SqlUtils.buildLimitClause(undefined, 20)).toBe('');
     });
 
     it('should handle zero values', () => {
       expect(SqlUtils.buildLimitClause(0)).toBe('LIMIT 0');
-      expect(SqlUtils.buildLimitClause(10, 0)).toBe('LIMIT 0, 10');
+      expect(SqlUtils.buildLimitClause(10, 0)).toBe('LIMIT 10');
     });
   });
 });

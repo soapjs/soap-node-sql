@@ -1,4 +1,14 @@
-import { Source, DatabaseSession, DbQuery, RepositoryQuery } from '@soapjs/soap';
+import {
+  Source,
+  DatabaseSession,
+  DbQuery,
+  RepositoryQuery,
+  FindParams,
+  CountParams,
+  RemoveParams,
+  AggregationParams,
+  UpdateParams,
+} from '@soapjs/soap';
 import { SoapSQL } from './soap.sql';
 import { SqlQueryFactory } from './sql.query-factory';
 import { SqlFieldResolver } from './sql.field-resolver';
@@ -93,33 +103,56 @@ export class SqlDataSource<T> implements Source<T> {
   }
 
   /**
-   * Finds documents/records based on criteria
+   * Finds documents/records based on criteria.
+   *
+   * Accepts (in priority order):
+   *   1. `RepositoryQuery`              — built into a DbQuery and re-dispatched.
+   *   2. Pre-built `{ sql, params }`    — executed verbatim.
+   *   3. Soap params (FindParams)       — recognised either by `instanceof
+   *                                        FindParams` or by carrying a `Where`
+   *                                        instance on `where`. Routed through
+   *                                        `SqlQueryFactory.createFindQuery` so
+   *                                        the WHERE clause goes through
+   *                                        `SqlWhereParser` and `limit/offset`
+   *                                        are honoured. The legacy
+   *                                        `buildWhereClause` path treats
+   *                                        `Where` like a plain object and
+   *                                        silently drops the clause; it also
+   *                                        ignores top-level `limit/offset` on
+   *                                        a `FindParams` instance, returning
+   *                                        every row.
+   *   4. Legacy `{ collection?, criteria|where?, options? }` plain object.
    */
-  async find(query?: DbQuery): Promise<T[]> {
+  async find(query?: DbQuery | FindParams | RepositoryQuery): Promise<T[]> {
     try {
+      if (RepositoryQuery.isQueryBuilder(query)) {
+        return this.find(query.build() as any);
+      }
 
-      
+      if (query && typeof (query as any).sql === 'string') {
+        const built = query as any;
+        const result = await this.query(built.sql, built.params);
+        return result.data as T[];
+      }
+
+      if (query instanceof FindParams || SqlDataSource.isSoapParamsWithWhere(query)) {
+        const built = this._queryFactory.createFindQuery(query as FindParams, this._collectionName) as any;
+        const result = await this.query(built.sql, built.params);
+        return result.data as T[];
+      }
+
       if (!query || typeof query === 'string') {
-        // Handle simple collection name or criteria
         const collection = (query as string) || this._collectionName;
-        const queryOptions = {
-          table: collection,
-          where: {},
-          fields: [],
-          limit: 1000
-        };
-
-        const sqlQuery = this._queryFactory.buildFindQuery(collection, {}, queryOptions);
+        const sqlQuery = this._queryFactory.buildFindQuery(collection, {}, { table: collection, where: {}, fields: [], limit: 1000 });
         const result = await this.query(sqlQuery.sql, sqlQuery.params);
         return result.data as T[];
       }
 
-      // Handle complex query object
       const queryObj = query as any;
       const collection = queryObj.collection || this._collectionName;
       const criteria = queryObj.criteria || queryObj.where || {};
       const options = queryObj.options || {};
-      
+
       const queryOptions = {
         table: collection,
         where: criteria,
@@ -131,9 +164,7 @@ export class SqlDataSource<T> implements Source<T> {
         having: options?.having
       };
 
-
       const sqlQuery = this._queryFactory.buildFindQuery(collection, criteria, queryOptions);
-      
       const result = await this.query(sqlQuery.sql, sqlQuery.params);
       return result.data as T[];
     } catch (error) {
@@ -209,19 +240,61 @@ export class SqlDataSource<T> implements Source<T> {
   }
 
   /**
-   * Updates documents/records
+   * Updates documents/records.
+   *
+   * Accepts (in priority order):
+   *   1. `RepositoryQuery`                 — built and re-dispatched.
+   *   2. Pre-built `{ sql, params }`       — executed verbatim.
+   *   3. Soap `{ updates, where: Where[], methods }` shape produced by
+   *      `ReadWriteRepository.update` (also matches `UpdateParams.isUpdateParams`).
+   *      Routed through `SqlQueryFactory.createUpdateQuery`.
+   *   4. Legacy `{ collection?, data|update?, criteria|where? }` plain object.
    */
-  async update(query: DbQuery): Promise<any> {
+  async update(query: DbQuery | UpdateParams<any> | RepositoryQuery): Promise<any> {
     try {
+      if (RepositoryQuery.isQueryBuilder(query)) {
+        return this.update(query.build() as any);
+      }
+
+      if (query && typeof (query as any).sql === 'string') {
+        const built = query as any;
+        const result = await this.query(built.sql, built.params);
+        return {
+          modifiedCount: result.affectedRows || 0,
+          upsertedCount: 0,
+          matchedCount: result.affectedRows || 0
+        };
+      }
+
+      // UpdateParams class OR shape produced by ReadWriteRepository.update
+      // ({ updates: ModelType[], where: Where[], methods: UpdateMethod[] }).
+      // instanceof is the strongest signal — `UpdateParams.isUpdateParams`
+      // also matches plain payloads like `{ sql, params }`, so we rely on
+      // structural checks only as a fallback.
+      const isSoapUpdateShape =
+        query instanceof UpdateParams ||
+        UpdateParams.isUpdateParams(query as any) ||
+        (query && Array.isArray((query as any).updates) && Array.isArray((query as any).where) && Array.isArray((query as any).methods));
+      if (isSoapUpdateShape) {
+        const params = query as any;
+        const built = this._queryFactory.createUpdateQuery(params.updates, params.where, params.methods, this._collectionName) as any;
+        const result = await this.query(built.sql, built.params);
+        return {
+          modifiedCount: result.affectedRows || 0,
+          upsertedCount: 0,
+          matchedCount: result.affectedRows || 0
+        };
+      }
+
       const queryObj = query as any;
       const collection = queryObj.collection || this._collectionName;
       const criteria = queryObj.criteria || queryObj.where || {};
       const data = queryObj.data || queryObj.update || {};
       const options = queryObj.options || {};
 
-      const updateQuery = this._queryFactory.buildUpdateQuery({ 
-        table: collection, 
-        data, 
+      const updateQuery = this._queryFactory.buildUpdateQuery({
+        table: collection,
+        data,
         where: criteria,
         limit: options?.limit
       });
@@ -238,11 +311,53 @@ export class SqlDataSource<T> implements Source<T> {
   }
 
   /**
-   * Removes documents/records (alias for delete)
+   * Removes documents/records (alias for delete).
+   *
+   * Accepts (in priority order):
+   *   1. `RepositoryQuery`            — built and re-dispatched.
+   *   2. Pre-built `{ sql, params }`  — executed verbatim.
+   *   3. Soap params (`RemoveParams`) — detected by the presence of a `Where`
+   *                                      instance on `where`; routed through
+   *                                      `SqlQueryFactory.createRemoveQuery`.
+   *                                      The legacy path would treat `Where` like
+   *                                      a plain object and drop the clause — i.e.
+   *                                      DELETE EVERY ROW. This is the same class
+   *                                      of bug we patched in soap (`isFindParams`
+   *                                      was accepting `RepositoryQuery` instances).
+   *   4. Legacy `{ collection?, criteria|where? }` plain object.
    */
-  async remove(query: DbQuery): Promise<any> {
-    const queryObj = query as any;
-    return this.delete(queryObj.collection || this._collectionName, queryObj.criteria || queryObj.where, queryObj.options);
+  async remove(query: DbQuery | RemoveParams | RepositoryQuery): Promise<any> {
+    try {
+      if (RepositoryQuery.isQueryBuilder(query)) {
+        return this.remove(query.build() as any);
+      }
+
+      if (query && typeof (query as any).sql === 'string') {
+        const built = query as any;
+        const result = await this.query(built.sql, built.params);
+        return {
+          deletedCount: result.affectedRows || 0,
+          affectedRows: result.affectedRows || 0,
+          count: result.count || 0
+        };
+      }
+
+      if (query instanceof RemoveParams || SqlDataSource.isSoapParamsWithWhere(query)) {
+        const built = this._queryFactory.createRemoveQuery(query as RemoveParams, this._collectionName) as any;
+        const result = await this.query(built.sql, built.params);
+        return {
+          deletedCount: result.affectedRows || 0,
+          affectedRows: result.affectedRows || 0,
+          count: result.count || 0
+        };
+      }
+
+      const queryObj = query as any;
+      return this.delete(queryObj.collection || this._collectionName, queryObj.criteria || queryObj.where, queryObj.options);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      throw new SqlQueryError(`Remove operation failed: ${errorMessage}`, errorMessage);
+    }
   }
 
   /**
@@ -263,15 +378,42 @@ export class SqlDataSource<T> implements Source<T> {
   }
 
   /**
-   * Aggregates documents/records
+   * Aggregates documents/records.
+   *
+   * Accepts (in priority order):
+   *   1. `RepositoryQuery`               — built and re-dispatched (typical escape
+   *                                         hatch for vendor-specific aggregations).
+   *   2. Pre-built `{ sql, params }`     — executed verbatim.
+   *   3. Soap `AggregationParams`        — detected by aggregation-only fields
+   *                                         (`sum`/`average`/`min`/`max`/`count`/`groupBy`);
+   *                                         routed through `SqlQueryFactory.createAggregationQuery`.
+   *   4. Legacy `{ pipeline: [...] }`    — MongoDB-style pipeline translated to SQL.
    */
-  async aggregate<AggregationType = T>(query: DbQuery): Promise<AggregationType[]> {
+  async aggregate<AggregationType = T>(query: DbQuery | AggregationParams | RepositoryQuery): Promise<AggregationType[]> {
     try {
-      // Handle query object
-      const queryObj = query as any;
-      const pipeline = queryObj.pipeline || [];
-      
-      // Convert MongoDB aggregation pipeline to SQL
+      if (RepositoryQuery.isQueryBuilder(query)) {
+        return this.aggregate(query.build() as any);
+      }
+
+      if (query && typeof (query as any).sql === 'string') {
+        const built = query as any;
+        const result = await this.query(built.sql, built.params);
+        return result.data as AggregationType[];
+      }
+
+      const q: any = query;
+      const looksLikeAggregationParams = query instanceof AggregationParams || (q && typeof q === 'object' && !Array.isArray(q.pipeline) && (
+        q.sum !== undefined || q.average !== undefined || q.min !== undefined ||
+        q.max !== undefined || q.count !== undefined ||
+        Array.isArray(q.groupBy)
+      ));
+      if (looksLikeAggregationParams) {
+        const built = this._queryFactory.createAggregationQuery(query as AggregationParams, this._collectionName) as any;
+        const result = await this.query(built.sql, built.params);
+        return result.data as AggregationType[];
+      }
+
+      const pipeline = q?.pipeline || [];
       const sqlQuery = this._convertAggregationPipeline(pipeline);
       const result = await this.query(sqlQuery.sql, sqlQuery.params);
       return result.data as AggregationType[];
@@ -279,6 +421,25 @@ export class SqlDataSource<T> implements Source<T> {
       const errorMessage = error instanceof Error ? error.message : String(error);
       throw new SqlQueryError(`Aggregate operation failed: ${errorMessage}`, errorMessage);
     }
+  }
+
+  /**
+   * Detects soap-style params (FindParams / CountParams / RemoveParams) by the
+   * presence of a `Where` instance on `where` (a `Where` exposes `.build()`).
+   *
+   * We can't rely on `FindParams.isFindParams` etc — those static guards are
+   * loose by design and also match legacy DbQuery objects like
+   * `{ collection, criteria, options }`, sending them down the wrong code path
+   * (where the mocked-or-real `createXxxQuery` then returns nothing usable).
+   *
+   * Plain-object `where: {}` still uses the legacy `buildWhereClause` path, so
+   * existing callers passing `{ collection, where: { id: 1 } }` keep working.
+   */
+  private static isSoapParamsWithWhere(query: any): boolean {
+    if (!query || typeof query !== 'object') return false;
+    if (Array.isArray(query)) return false;
+    const w = query.where;
+    return !!(w && typeof w === 'object' && typeof (w as any).build === 'function');
   }
 
   /**
@@ -318,24 +479,41 @@ export class SqlDataSource<T> implements Source<T> {
   }
 
   /**
-   * Counts documents/records
+   * Counts documents/records.
+   *
+   * Accepts (in priority order):
+   *   1. no argument                  — counts every row in `_collectionName`.
+   *   2. `RepositoryQuery`            — built and re-dispatched.
+   *   3. Pre-built `{ sql, params }`  — executed verbatim.
+   *   4. Soap params (`CountParams`)  — detected by the presence of a `Where`
+   *                                      instance on `where`; routed through
+   *                                      `SqlQueryFactory.createCountQuery`.
+   *   5. Legacy `{ collection?, criteria|where?, options? }` plain object.
    */
-  async count(query?: DbQuery): Promise<number> {
+  async count(query?: DbQuery | CountParams | RepositoryQuery): Promise<number> {
     try {
       if (!query) {
-        // Count all documents in the collection
-        const queryOptions = {
-          table: this._collectionName,
-          where: {},
-          fields: ['COUNT(*) as count']
-        };
-
-        const countQuery = this._queryFactory.buildCountQuery(queryOptions);
+        const countQuery = this._queryFactory.buildCountQuery({ table: this._collectionName, where: {}, fields: ['COUNT(*) as count'] });
         const result = await this.query(countQuery.sql, countQuery.params);
         return parseInt(result.data[0]?.count) || 0;
       }
 
-      // Handle query object
+      if (RepositoryQuery.isQueryBuilder(query)) {
+        return this.count(query.build() as any);
+      }
+
+      if (typeof (query as any).sql === 'string') {
+        const built = query as any;
+        const result = await this.query(built.sql, built.params);
+        return parseInt(result.data[0]?.count) || 0;
+      }
+
+      if (query instanceof CountParams || SqlDataSource.isSoapParamsWithWhere(query)) {
+        const built = this._queryFactory.createCountQuery(query as CountParams, this._collectionName) as any;
+        const result = await this.query(built.sql, built.params);
+        return parseInt(result.data[0]?.count) || 0;
+      }
+
       const queryObj = query as any;
       const collection = queryObj.collection || this._collectionName;
       const criteria = queryObj.criteria || queryObj.where || {};

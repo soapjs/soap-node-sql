@@ -388,6 +388,32 @@ describe('SqlWhereParser', () => {
     });
   });
 
+  // Regression: previously the parser always emitted MySQL-style backticks,
+  // which Postgres rejected with "syntax error at or near ...". The quoting
+  // style must follow the configured dialect.
+  describe('dialect-aware identifier quoting (regression)', () => {
+    it('should quote identifiers with backticks for MySQL', () => {
+      const mysqlParser = new SqlWhereParser('mysql');
+      const result = mysqlParser.parse({ publisher: 'marvel', role: 'writer' });
+      expect(result.sql).toBe('WHERE `publisher` = ? AND `role` = ?');
+      expect(result.params).toEqual(['marvel', 'writer']);
+    });
+
+    it('should quote identifiers with double quotes for PostgreSQL', () => {
+      const pgParser = new SqlWhereParser('postgresql');
+      const result = pgParser.parse({ publisher: 'marvel', role: 'writer' });
+      expect(result.sql).toBe('WHERE "publisher" = ? AND "role" = ?');
+      expect(result.params).toEqual(['marvel', 'writer']);
+    });
+
+    it('should quote identifiers with double quotes for SQLite', () => {
+      const sqliteParser = new SqlWhereParser('sqlite');
+      const result = sqliteParser.parse({ name: 'Stan' });
+      expect(result.sql).toBe('WHERE "name" = ?');
+      expect(result.params).toEqual(['Stan']);
+    });
+  });
+
   describe('regex to LIKE conversion', () => {
     it('should convert regex dots to underscores', () => {
       const result = parser.parse({ name: { regex: 'John.Doe' } });
@@ -625,10 +651,13 @@ describe('SqlWhereParser', () => {
         expect(result.hasConditions).toBe(true);
       });
 
+      // Postgres/SQLite use ANSI double quotes for identifiers — backticks are
+      // a MySQL-only extension and were rejected by `psql` with
+      // "syntax error at or near …".
       it('should parse json_extract for PostgreSQL', () => {
         const pgParser = new SqlWhereParser('postgresql');
         const result = pgParser.parse({ profile: { json_extract: { path: '$.preferences.theme', value: 'dark' } } });
-        expect(result.sql).toBe('WHERE `profile`->>\'$.preferences.theme\' = ?');
+        expect(result.sql).toBe('WHERE "profile"->>\'$.preferences.theme\' = ?');
         expect(result.params).toEqual(['dark']);
         expect(result.hasConditions).toBe(true);
       });
@@ -636,7 +665,7 @@ describe('SqlWhereParser', () => {
       it('should parse json_extract for SQLite', () => {
         const sqliteParser = new SqlWhereParser('sqlite');
         const result = sqliteParser.parse({ profile: { json_extract: { path: '$.preferences.theme', value: 'dark' } } });
-        expect(result.sql).toBe('WHERE json_extract(`profile`, \'$.preferences.theme\') = ?');
+        expect(result.sql).toBe('WHERE json_extract("profile", \'$.preferences.theme\') = ?');
         expect(result.params).toEqual(['dark']);
         expect(result.hasConditions).toBe(true);
       });
@@ -654,7 +683,7 @@ describe('SqlWhereParser', () => {
               it('should parse full_text_search for PostgreSQL', () => {
           const pgParser = new SqlWhereParser('postgresql');
           const result = pgParser.parse({ content: { full_text_search: { value: 'search term' } } });
-          expect(result.sql).toBe('WHERE to_tsvector(\'english\', `content`) @@ plainto_tsquery(\'english\', ?)');
+          expect(result.sql).toBe('WHERE to_tsvector(\'english\', "content") @@ plainto_tsquery(\'english\', ?)');
           expect(result.params).toEqual(['search term']);
           expect(result.hasConditions).toBe(true);
         });
@@ -662,7 +691,7 @@ describe('SqlWhereParser', () => {
               it('should parse full_text_search for SQLite', () => {
           const sqliteParser = new SqlWhereParser('sqlite');
           const result = sqliteParser.parse({ content: { full_text_search: { value: 'search term' } } });
-          expect(result.sql).toBe('WHERE `content` MATCH ?');
+          expect(result.sql).toBe('WHERE "content" MATCH ?');
           expect(result.params).toEqual(['search term']);
           expect(result.hasConditions).toBe(true);
         });
@@ -680,7 +709,7 @@ describe('SqlWhereParser', () => {
               it('should parse array_contains for PostgreSQL', () => {
           const pgParser = new SqlWhereParser('postgresql');
           const result = pgParser.parse({ tags: { array_contains: { values: ['important', 'urgent'] } } });
-          expect(result.sql).toBe('WHERE `tags` @> ?');
+          expect(result.sql).toBe('WHERE "tags" @> ?');
           expect(result.params).toEqual([['important', 'urgent']]);
           expect(result.hasConditions).toBe(true);
         });
@@ -688,7 +717,7 @@ describe('SqlWhereParser', () => {
               it('should parse array_contains for SQLite', () => {
           const sqliteParser = new SqlWhereParser('sqlite');
           const result = sqliteParser.parse({ tags: { array_contains: { values: ['important', 'urgent'] } } });
-          expect(result.sql).toBe('WHERE json_extract(`tags`, \'$\') = ?');
+          expect(result.sql).toBe('WHERE json_extract("tags", \'$\') = ?');
           expect(result.params).toEqual(['["important","urgent"]']);
           expect(result.hasConditions).toBe(true);
         });

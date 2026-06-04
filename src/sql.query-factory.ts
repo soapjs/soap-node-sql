@@ -339,10 +339,14 @@ export class SqlQueryFactory<T> implements DbQueryFactory {
     // Table
     sql += ` FROM ${SqlUtils.escapeIdentifier(table, this.databaseType)}`;
     
-    // Where clause
-    let params: any[] = [];
-    if (where && Object.keys(where).length > 0) {
-      const whereClause = SqlUtils.buildWhereClause(where, this.databaseType);
+    // WHERE — accept either raw criteria (Record<string, any>) or a
+    // pre-parsed { sql, params } payload from `SqlWhereParser.parse()`.
+    // The createFindQuery path runs the Where through the parser BEFORE this
+    // method, so we must not double-parse — otherwise `sql` and `params`
+    // are mistaken for column names ("column 'sql' does not exist").
+    const params: any[] = [];
+    const whereClause = SqlQueryFactory.resolveClause(where, this.databaseType);
+    if (whereClause) {
       sql += ` WHERE ${whereClause.sql}`;
       params.push(...whereClause.params);
     }
@@ -353,8 +357,8 @@ export class SqlQueryFactory<T> implements DbQueryFactory {
     }
     
     // Having
-    if (having && Object.keys(having).length > 0) {
-      const havingClause = SqlUtils.buildWhereClause(having, this.databaseType);
+    const havingClause = SqlQueryFactory.resolveClause(having, this.databaseType);
+    if (havingClause) {
       sql += ` HAVING ${havingClause.sql}`;
       params.push(...havingClause.params);
     }
@@ -374,6 +378,36 @@ export class SqlQueryFactory<T> implements DbQueryFactory {
     }
     
     return { sql, params };
+  }
+
+  /**
+   * Accepts either:
+   *   - a pre-parsed `{ sql, params }` payload (from SqlWhereParser.parse) and
+   *     returns it verbatim (with the leading "WHERE " stripped — the parser
+   *     prepends it, but the call sites here emit WHERE/HAVING themselves), or
+   *   - a raw criteria object `{ field: value, ... }` parsed through
+   *     `SqlUtils.buildWhereClause`.
+   *
+   * Returning `null` for empty/missing clauses keeps the call sites tidy —
+   * they only append "WHERE ..." / "HAVING ..." when there's something to add.
+   */
+  private static resolveClause(
+    clause: any,
+    databaseType: DatabaseType
+  ): { sql: string; params: any[] } | null {
+    if (!clause || typeof clause !== 'object') return null;
+    if (typeof clause.sql === 'string') {
+      // SqlWhereParser.parseCondition returns `WHERE <expr>` (or empty).
+      // Strip the prefix so our call sites can compose WHERE/HAVING uniformly
+      // — otherwise we'd emit `WHERE WHERE <expr>` and Postgres rightfully
+      // throws "syntax error at or near WHERE".
+      let body = clause.sql.trim();
+      if (body.toUpperCase().startsWith('WHERE ')) body = body.slice(6).trim();
+      if (!body || body === '1 = 1' || body === '1=1') return null;
+      return { sql: body, params: Array.isArray(clause.params) ? clause.params : [] };
+    }
+    if (Object.keys(clause).length === 0) return null;
+    return SqlUtils.buildWhereClause(clause, databaseType);
   }
 
   /**
@@ -442,92 +476,85 @@ export class SqlQueryFactory<T> implements DbQueryFactory {
   }
 
   /**
-   * Builds an UPDATE query
+   * Builds an UPDATE query. `where` accepts either raw criteria or a
+   * pre-parsed `{ sql, params }` payload (e.g. from createUpdateQuery → parser).
    */
   buildUpdateQuery(options: UpdateOptions): { sql: string; params: any[] } {
     const { table, data, where, limit } = options;
-    
+
     if (!data || Object.keys(data).length === 0) {
       throw new Error('No data provided for UPDATE query');
     }
-    
+
     const fields = Object.keys(data);
     const values = Object.values(data);
-    
+
     let sql = `UPDATE ${SqlUtils.escapeIdentifier(table, this.databaseType)} SET `;
     sql += fields.map(field => `${SqlUtils.escapeIdentifier(field, this.databaseType)} = ?`).join(', ');
-    
-    // Where clause
-    let params = [...values];
-    if (where && Object.keys(where).length > 0) {
-      const whereClause = SqlUtils.buildWhereClause(where, this.databaseType);
+
+    const params: any[] = [...values];
+    const whereClause = SqlQueryFactory.resolveClause(where, this.databaseType);
+    if (whereClause) {
       sql += ` WHERE ${whereClause.sql}`;
       params.push(...whereClause.params);
     }
-    
-    // Limit (MySQL only)
+
+    // Per-statement LIMIT is a MySQL extension; PostgreSQL/SQLite reject it.
     if (limit && this.databaseType === 'mysql') {
       sql += ` LIMIT ${limit}`;
     }
-    
+
     return { sql, params };
   }
 
   /**
-   * Builds a DELETE query
+   * Builds a DELETE query. `where` accepts the same shapes as UPDATE.
    */
   buildDeleteQuery(options: DeleteOptions): { sql: string; params: any[] } {
     const { table, where, limit } = options;
-    
+
     let sql = `DELETE FROM ${SqlUtils.escapeIdentifier(table, this.databaseType)}`;
-    
-    // Where clause
-    let params: any[] = [];
-    if (where && Object.keys(where).length > 0) {
-      const whereClause = SqlUtils.buildWhereClause(where, this.databaseType);
+
+    const params: any[] = [];
+    const whereClause = SqlQueryFactory.resolveClause(where, this.databaseType);
+    if (whereClause) {
       sql += ` WHERE ${whereClause.sql}`;
       params.push(...whereClause.params);
     }
-    
-    // Limit (MySQL only)
+
     if (limit && this.databaseType === 'mysql') {
       sql += ` LIMIT ${limit}`;
     }
-    
+
     return { sql, params };
   }
 
   /**
-   * Builds a COUNT query
+   * Builds a COUNT query. `where` and `having` accept the same shapes as SELECT.
    */
   buildCountQuery(options: QueryOptions): { sql: string; params: any[] } {
     const { table, where, groupBy, having } = options;
-    
+
     let sql = 'SELECT COUNT(*) as count';
-    
-    // Table
     sql += ` FROM ${SqlUtils.escapeIdentifier(table, this.databaseType)}`;
-    
-    // Where clause
-    let params: any[] = [];
-    if (where && Object.keys(where).length > 0) {
-      const whereClause = SqlUtils.buildWhereClause(where, this.databaseType);
+
+    const params: any[] = [];
+    const whereClause = SqlQueryFactory.resolveClause(where, this.databaseType);
+    if (whereClause) {
       sql += ` WHERE ${whereClause.sql}`;
       params.push(...whereClause.params);
     }
-    
-    // Group by
+
     if (groupBy && groupBy.length > 0) {
       sql += ` GROUP BY ${groupBy.map(field => SqlUtils.escapeIdentifier(field, this.databaseType)).join(', ')}`;
     }
-    
-    // Having
-    if (having && Object.keys(having).length > 0) {
-      const havingClause = SqlUtils.buildWhereClause(having, this.databaseType);
+
+    const havingClause = SqlQueryFactory.resolveClause(having, this.databaseType);
+    if (havingClause) {
       sql += ` HAVING ${havingClause.sql}`;
       params.push(...havingClause.params);
     }
-    
+
     return { sql, params };
   }
 

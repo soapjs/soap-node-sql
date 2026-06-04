@@ -489,11 +489,25 @@ export class SqlWhereParser {
   }
 
   /**
-   * Escapes SQL identifiers
+   * Escapes SQL identifiers using the dialect's quoting style.
+   *
+   * - MySQL  -> backticks. A backtick inside the identifier is doubled
+   *             (`` ` → `` `` ``), other quote/backslash characters are
+   *             backslash-escaped to keep parity with the historical behaviour
+   *             that callers rely on.
+   * - Postgres / SQLite -> ANSI double quotes; an embedded `"` is doubled.
+   *
+   * This is the only safe way to splice user-supplied field names into raw
+   * SQL — previously the parser hard-coded backticks regardless of dialect,
+   * which made Postgres reject the resulting query with
+   * "syntax error at or near =".
    */
   private _escapeIdentifier(identifier: string): string {
-    // Basic SQL injection prevention - escape backticks and quotes
-    return `\`${identifier.replace(/[`'"]/g, '\\$&')}\``;
+    if (this._databaseType === 'postgresql' || this._databaseType === 'sqlite') {
+      return `"${identifier.replace(/"/g, '""')}"`;
+    }
+    const mysqlEscaped = identifier.replace(/[`'"]/g, '\\$&');
+    return `\`${mysqlEscaped}\``;
   }
 
   /**
