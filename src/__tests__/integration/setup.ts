@@ -400,7 +400,7 @@ export const cleanupSqliteTables = async () => {
       const db = sqliteSoap.sqliteDb;
       
       return new Promise<void>((resolve, reject) => {
-        db.all("SELECT name FROM sqlite_master WHERE type='table'", (err: any, tables: any[]) => {
+        db.all("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'", (err: any, tables: any[]) => {
           if (err) {
             reject(err);
             return;

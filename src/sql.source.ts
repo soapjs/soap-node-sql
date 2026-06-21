@@ -1,5 +1,6 @@
 import {
   Source,
+  SourceOptions,
   DatabaseSession,
   DbQuery,
   RepositoryQuery,
@@ -15,6 +16,12 @@ import { SqlFieldResolver } from './sql.field-resolver';
 import { SqlTransformers } from './sql.transformers';
 import { SqlSessionManager } from './sql.session-manager';
 import { SqlTransaction } from './sql.transaction';
+import {
+  PerformanceConfig,
+  QueryPerformanceData,
+  SqlPerformanceMetrics,
+  SqlPerformanceMonitor,
+} from './sql.performance';
 
 import { SqlUtils } from './sql.utils';
 import { 
@@ -30,6 +37,13 @@ import {
 } from './sql.types';
 import { SqlConnectionError, SqlQueryError } from './sql.errors';
 
+export type SqlSourceOptions<T> = SourceOptions<T> & {
+  performanceMonitoring?: Partial<PerformanceConfig> & {
+    maxMetrics?: number;
+    metricsCollector?: (metrics: QueryPerformanceData) => void;
+  };
+};
+
 /**
  * SQL Data Source implementation for SoapJS
  * Supports both MySQL and PostgreSQL with engine-agnostic API
@@ -43,16 +57,26 @@ export class SqlDataSource<T> implements Source<T> {
   private _sessionManager: SqlSessionManager;
   private _databaseType: 'mysql' | 'postgresql' | 'sqlite';
   private _collectionName: string;
+  private _performanceMonitor: SqlPerformanceMonitor;
+  public readonly options?: SqlSourceOptions<T>;
 
-  constructor(soapSql: SoapSQL, collectionName: string = 'default', dbQueryFactory?: any) {
+  constructor(soapSql: SoapSQL, collectionName: string = 'default', optionsOrQueryFactory?: SqlSourceOptions<T> | any) {
     this._soapSql = soapSql;
     this._databaseType = soapSql.databaseType || 'mysql';
-    this._queryFactory = new SqlQueryFactory(this._databaseType);
-    this._dbQueryFactory = dbQueryFactory;
-    this._fieldResolver = new SqlFieldResolver<any>({}, this._databaseType);
+    this.options = this._normalizeSourceOptions(optionsOrQueryFactory);
+    this._dbQueryFactory = this.options?.queries || (this.options ? undefined : optionsOrQueryFactory);
+    this._queryFactory = (this._dbQueryFactory as SqlQueryFactory<T>) || new SqlQueryFactory(this._databaseType);
+    this._fieldResolver = new SqlFieldResolver<any>(
+      {
+        modelClass: this.options?.modelClass,
+        modelFieldMappings: this.options?.modelFieldMappings,
+      },
+      this._databaseType
+    );
     this._transformers = new SqlTransformers();
     this._sessionManager = soapSql.sessions;
     this._collectionName = collectionName;
+    this._performanceMonitor = this._createPerformanceMonitor(this.options?.performanceMonitoring);
   }
 
   /**
@@ -65,9 +89,13 @@ export class SqlDataSource<T> implements Source<T> {
   /**
    * Creates a new SQL data source
    */
-  public static async create<T = any>(config: SqlConfig, collectionName?: string): Promise<SqlDataSource<T>> {
+  public static async create<T = any>(
+    config: SqlConfig,
+    collectionName?: string,
+    options?: SqlSourceOptions<T>
+  ): Promise<SqlDataSource<T>> {
     const soapSql = await SoapSQL.create(config as any);
-    return new SqlDataSource<T>(soapSql, collectionName);
+    return new SqlDataSource<T>(soapSql, collectionName, options);
   }
 
   /**
@@ -86,20 +114,43 @@ export class SqlDataSource<T> implements Source<T> {
    * Executes a raw SQL query
    */
   async query(sql: string, params?: any[], options?: QueryOptions): Promise<QueryResult> {
+    const startTime = Date.now();
     try {
       const result = await this._soapSql.query(sql, params);
-      
-      return {
+      const queryResult = {
         data: result.rows || result || [],
         count: result.rowCount || result.affectedRows || 0,
         insertId: result.insertId,
         info: result.info,
         affectedRows: result.affectedRows
       };
+      this._recordPerformance(sql, params || [], startTime, true, undefined, queryResult.affectedRows || queryResult.count);
+      return queryResult;
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
+      this._recordPerformance(sql, params || [], startTime, false, errorMessage);
       throw new SqlQueryError(`Query execution failed: ${errorMessage}`, errorMessage);
     }
+  }
+
+  getPerformanceMetrics(): SqlPerformanceMetrics {
+    return this._performanceMonitor.getMetrics();
+  }
+
+  getPerformanceSummary(): ReturnType<SqlPerformanceMonitor['getPerformanceSummary']> {
+    return this._performanceMonitor.getPerformanceSummary();
+  }
+
+  getSlowQueries(threshold?: number): QueryPerformanceData[] {
+    return this._performanceMonitor.getSlowQueries(threshold);
+  }
+
+  getRecentQueries(limit?: number): QueryPerformanceData[] {
+    return this._performanceMonitor.getRecentQueries(limit);
+  }
+
+  resetPerformanceMetrics(): void {
+    this._performanceMonitor.resetMetrics();
   }
 
   /**
@@ -721,6 +772,55 @@ export class SqlDataSource<T> implements Source<T> {
    */
   getDatabaseType(): 'mysql' | 'postgresql' | 'sqlite' {
     return this._databaseType;
+  }
+
+  private _normalizeSourceOptions(optionsOrQueryFactory?: SqlSourceOptions<T> | any): SqlSourceOptions<T> | undefined {
+    if (!optionsOrQueryFactory || typeof optionsOrQueryFactory !== 'object') {
+      return undefined;
+    }
+
+    const looksLikeSourceOptions =
+      'modelClass' in optionsOrQueryFactory ||
+      'modelFieldMappings' in optionsOrQueryFactory ||
+      'queries' in optionsOrQueryFactory ||
+      'performanceMonitoring' in optionsOrQueryFactory ||
+      'indexes' in optionsOrQueryFactory;
+
+    return looksLikeSourceOptions ? optionsOrQueryFactory : undefined;
+  }
+
+  private _createPerformanceMonitor(config?: SqlSourceOptions<T>['performanceMonitoring']): SqlPerformanceMonitor {
+    const normalizedConfig = {
+      enabled: config?.enabled ?? false,
+      slowQueryThreshold: config?.slowQueryThreshold ?? 1000,
+      maxQueriesToTrack: config?.maxQueriesToTrack ?? config?.maxMetrics ?? 1000,
+      enableQueryLogging: config?.enableQueryLogging ?? false,
+      enableMetricsCollection: config?.enableMetricsCollection ?? true,
+    };
+
+    const monitor = new SqlPerformanceMonitor(normalizedConfig);
+    if (config?.metricsCollector) {
+      monitor.on('queryExecuted', config.metricsCollector);
+    }
+    return monitor;
+  }
+
+  private _recordPerformance(
+    sql: string,
+    params: any[],
+    startTime: number,
+    success: boolean,
+    error?: string,
+    rowsAffected?: number
+  ): void {
+    this._performanceMonitor.recordQuery(
+      sql,
+      params,
+      Date.now() - startTime,
+      success,
+      error,
+      rowsAffected
+    );
   }
 
   /**

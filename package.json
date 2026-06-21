@@ -1,11 +1,20 @@
 {
-  "name": "@soapjs/soap-node-sql",
-  "version": "0.2.1",
+  "name": "@soapjs/soap-sql",
+  "version": "1.0.0",
   "description": "Seamless SQL integration for SoapJS projects, facilitating clean architecture practices and streamlined database interactions.",
   "homepage": "https://docs.soapjs.com",
-  "repository": "https://github.com/soapjs/soap-node-sql",
+  "repository": "https://github.com/soapjs/soap-sql",
   "main": "build/index.js",
   "types": "build/index.d.ts",
+  "files": [
+    "build",
+    "README.md",
+    "LICENSE",
+    "package.json"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
   "license": "MIT",
   "author": "Radoslaw Kamysz",
   "scripts": {
@@ -13,7 +22,7 @@
     "test:integration": "jest --config=jest.config.integration.json",
     "test": "npm run test:unit && npm run test:integration",
     "clean": "rm -rf ./build",
-    "build": "npm run clean && tsc -b",
+    "build": "npm run clean && tsc --project tsconfig.build.json",
     "prepublish": "npm run clean && tsc --project tsconfig.build.json"
   },
   "devDependencies": {
@@ -35,7 +44,7 @@
     "typescript": "^4.8.2"
   },
   "peerDependencies": {
-    "@soapjs/soap": ">=0.12.0",
+    "@soapjs/soap": "^0.14.0",
     "mysql2": "*",
     "pg": "*",
     "sqlite3": "*"

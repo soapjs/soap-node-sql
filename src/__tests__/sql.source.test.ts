@@ -94,6 +94,49 @@ describe('SqlDataSource', () => {
       const ds = new SqlDataSource(mockSoapSql, 'test');
       expect(mockSoapSql.databaseType).toBe('mysql');
     });
+
+    it('should accept SourceOptions for field mappings and performance monitoring', async () => {
+      const metricsCollector = jest.fn();
+      const ds = new SqlDataSource(mockSoapSql, 'users', {
+        modelFieldMappings: {
+          createdAt: { name: 'created_at', type: Date }
+        },
+        performanceMonitoring: {
+          enabled: true,
+          slowQueryThreshold: 100,
+          metricsCollector
+        }
+      });
+
+      mockSoapSql.query.mockResolvedValue([{ id: 1, created_at: '2026-01-01' }]);
+
+      await ds.query('SELECT * FROM users');
+
+      expect(SqlFieldResolver).toHaveBeenCalledWith(
+        {
+          modelClass: undefined,
+          modelFieldMappings: {
+            createdAt: { name: 'created_at', type: Date }
+          }
+        },
+        'mysql'
+      );
+      expect(ds.getPerformanceMetrics().queryCount).toBe(1);
+      expect(ds.getRecentQueries(1)[0].sql).toBe('SELECT * FROM users');
+      expect(metricsCollector).toHaveBeenCalledWith(expect.objectContaining({
+        sql: 'SELECT * FROM users',
+        success: true
+      }));
+    });
+
+    it('should keep performance monitoring disabled by default', async () => {
+      mockSoapSql.query.mockResolvedValue([{ id: 1 }]);
+
+      await dataSource.query('SELECT * FROM users');
+
+      expect(dataSource.getPerformanceMetrics().queryCount).toBe(0);
+      expect(dataSource.getSlowQueries()).toEqual([]);
+    });
   });
 
   describe('static create', () => {

@@ -1,4 +1,4 @@
-# @soapjs/soap-node-sql
+# @soapjs/soap-sql
 
 This package provides SQL database integration for the SoapJS framework, supporting PostgreSQL, MySQL, and SQLite. It enables seamless interaction with SQL databases while ensuring that your data access layer is clean, efficient, and scalable.
 
@@ -30,8 +30,8 @@ This package provides SQL database integration for the SoapJS framework, support
 - **Features**: Full support including stored procedures, views, and MySQL-specific optimizations
 
 ### SQLite
-- **Driver**: `better-sqlite3`
-- **Expected Version**: `^9.2.0`
+- **Driver**: `sqlite3`
+- **Expected Version**: `^5.1.7`
 - **Features**: Full support for embedded database operations with file-based storage
 
 ## Installation
@@ -40,13 +40,13 @@ Remember to have the appropriate database driver and `@soapjs/soap` installed in
 
 ```bash
 # For PostgreSQL
-npm install @soapjs/soap-node-sql pg
+npm install @soapjs/soap-sql pg
 
 # For MySQL
-npm install @soapjs/soap-node-sql mysql2
+npm install @soapjs/soap-sql mysql2
 
 # For SQLite
-npm install @soapjs/soap-node-sql better-sqlite3
+npm install @soapjs/soap-sql sqlite3
 
 # Core SoapJS framework
 npm install @soapjs/soap
@@ -60,10 +60,10 @@ npm install @soapjs/soap
 import {
   SoapSQL,
   SqlSource,
-  SqlConfig,
+  SqlDatabaseConfig,
   SqlMigrationManager,
   createMigration
-} from '@soapjs/soap-node-sql';
+} from '@soapjs/soap-sql';
 import { Where, MetaMapper, DatabaseContext, ReadRepository, ReadWriteRepository, Entity } from '@soapjs/soap';
 ```
 
@@ -71,7 +71,7 @@ import { Where, MetaMapper, DatabaseContext, ReadRepository, ReadWriteRepository
 
 #### PostgreSQL Configuration
 ```typescript
-const postgresConfig = new SqlConfig({
+const postgresConfig = new SqlDatabaseConfig({
   type: 'postgresql',
   host: 'localhost',
   port: 5432,
@@ -79,17 +79,15 @@ const postgresConfig = new SqlConfig({
   username: 'user',
   password: 'password',
   ssl: false,
-  pool: {
-    min: 2,
-    max: 10,
-    idleTimeoutMillis: 30000
-  }
+  connectionLimit: 10,
+  acquireTimeout: 30000,
+  timeout: 30000
 });
 ```
 
 #### MySQL Configuration
 ```typescript
-const mysqlConfig = new SqlConfig({
+const mysqlConfig = new SqlDatabaseConfig({
   type: 'mysql',
   host: 'localhost',
   port: 3306,
@@ -97,24 +95,22 @@ const mysqlConfig = new SqlConfig({
   username: 'user',
   password: 'password',
   ssl: false,
-  pool: {
-    min: 2,
-    max: 10,
-    acquireTimeoutMillis: 30000
-  }
+  connectionLimit: 10,
+  acquireTimeout: 30000,
+  timeout: 30000
 });
 ```
 
 #### SQLite Configuration
 ```typescript
-const sqliteConfig = new SqlConfig({
+const sqliteConfig = new SqlDatabaseConfig({
   type: 'sqlite',
+  host: 'localhost',
+  port: 0,
   database: './myapp.db',
-  mode: 'rwc',
-  pool: {
-    min: 1,
-    max: 1
-  }
+  username: '',
+  password: '',
+  filename: './myapp.db'
 });
 ```
 
@@ -306,7 +302,7 @@ const top = await userSource.native(new TopDepartmentsQuery());
 ```
 
 `native()` runs the query verbatim and returns the raw rows, bypassing the query
-factory and the mapper. Available since `@soapjs/soap` 0.10 / this package 0.2.
+factory and the mapper. Available since `@soapjs/soap` 0.10 / this package 1.0.
 
 ### 7. Transaction Support
 
@@ -365,7 +361,7 @@ if (result.isSuccess()) {
 #### Creating Migrations
 
 ```typescript
-import { SqlMigrationManager, createMigration, MigrationDefinition } from '@soapjs/soap-node-sql';
+import { SqlMigrationManager, createMigration, MigrationDefinition } from '@soapjs/soap-sql';
 
 // Create a migration
 const createUsersTable = createMigration({
@@ -605,7 +601,7 @@ const textQuery = {
 
 ### Configuration Classes
 
-- **SqlConfig**: SQL configuration with connection pool settings
+- **SqlDatabaseConfig**: SQL configuration with connection pool settings
 - **MigrationConfig**: Configuration for database migrations
 - **PerformanceConfig**: Configuration for performance monitoring
 
@@ -630,7 +626,7 @@ const textQuery = {
 The package provides comprehensive error handling with specific SQL error types:
 
 ```typescript
-import { SqlError, DuplicateKeyError, ValidationError } from '@soapjs/soap-node-sql';
+import { SqlError, DuplicateKeyError, ValidationError } from '@soapjs/soap-sql';
 
 try {
   const result = await userRepo.add([user]);
@@ -738,7 +734,7 @@ const sortedUsers = await userRepo.find({
 
 ```typescript
 // Use environment variables for sensitive data
-const config = new SqlConfig({
+const config = new SqlDatabaseConfig({
   type: 'postgresql',
   host: process.env.DB_HOST || 'localhost',
   port: parseInt(process.env.DB_PORT || '5432'),
@@ -772,8 +768,8 @@ const updateResult = await userRepo.update({
 1. **Connection Issues**
    ```typescript
    // Check connection status
-   const isConnected = await soapSql.isConnected();
-   console.log('Connected:', isConnected);
+   const isConnected = await soapSql.isHealthy();
+   console.log('Healthy:', isConnected);
    ```
 
 2. **Performance Issues**
@@ -806,7 +802,7 @@ const updateResult = await userRepo.update({
 
 ### From Previous Versions
 
-#### Version 0.2.x to 0.3.x
+#### Version 0.x to 1.0.0
 
 1. **Performance Monitoring**: New optional feature - no breaking changes
 2. **Connection Pool**: Enhanced configuration - backward compatible
@@ -814,7 +810,7 @@ const updateResult = await userRepo.update({
 
 #### Breaking Changes
 
-- None in version 0.3.x
+- 1.0.0 narrows the supported `@soapjs/soap` peer range to `^0.14.0` and requires Node.js `>=20`.
 
 ## Contributing
 
@@ -835,8 +831,8 @@ We welcome contributions! Please follow these steps:
 
 ```bash
 # Clone the repository
-git clone https://github.com/soapjs/soap-node-sql.git
-cd soap-node-sql
+git clone https://github.com/soapjs/soap-sql.git
+cd soap-sql
 
 # Install dependencies
 npm install
@@ -858,8 +854,8 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ## Support
 
 - **Documentation**: [https://docs.soapjs.com](https://docs.soapjs.com)
-- **Issues**: [GitHub Issues](https://github.com/soapjs/soap-node-sql/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/soapjs/soap-node-sql/discussions)
+- **Issues**: [GitHub Issues](https://github.com/soapjs/soap-sql/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/soapjs/soap-sql/discussions)
 - **Email**: radoslaw.kamysz@gmail.com
 
 ## Expected Package Versions
@@ -868,8 +864,8 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ```json
 {
-  "@soapjs/soap": "^0.3.0",
-  "typescript": "^5.0.0"
+  "@soapjs/soap": "^0.14.0",
+  "typescript": "^4.8.2"
 }
 ```
 
@@ -877,9 +873,9 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ```json
 {
-  "pg": "^8.11.0",
-  "mysql2": "^3.6.0", 
-  "better-sqlite3": "^9.2.0"
+  "pg": "^8.0.0",
+  "mysql2": "^3.0.0",
+  "sqlite3": "^5.1.7"
 }
 ```
 
@@ -887,17 +883,15 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ```json
 {
-  "@types/pg": "^8.10.0",
-  "@types/better-sqlite3": "^7.6.0",
-  "jest": "^29.0.0",
-  "testcontainers": "^10.0.0"
+  "@types/pg": "^8.15.5",
+  "@types/sqlite3": "^5.1.0",
+  "jest": "^27.4.5",
+  "testcontainers": "^10.28.0"
 }
 ```
 
 ### Version Compatibility Matrix
 
-| Package Version | @soapjs/soap | pg | mysql2 | better-sqlite3 | Node.js |
-|----------------|--------------|----|--------|----------------|---------|
-| 0.3.x | ^0.3.0 | ^8.11.0 | ^3.6.0 | ^9.2.0 | >=16.0.0 |
-| 0.2.x | ^0.2.0 | ^8.10.0 | ^3.5.0 | ^9.1.0 | >=14.0.0 |
-| 0.1.x | ^0.1.0 | ^8.9.0 | ^3.4.0 | ^9.0.0 | >=12.0.0 |
+| Package Version | @soapjs/soap | pg | mysql2 | sqlite3 | Node.js |
+|----------------|--------------|----|--------|---------|---------|
+| 1.0.x | ^0.14.0 | ^8.0.0 | ^3.0.0 | ^5.1.7 | >=20.0.0 |
