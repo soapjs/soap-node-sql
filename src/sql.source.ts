@@ -273,8 +273,8 @@ export class SqlDataSource<T> implements Source<T> {
             onDuplicateKeyUpdate: options?.hint?.onDuplicateKeyUpdate
           });
           const result = await this.query(insertQuery.sql, insertQuery.params, options);
-          // For INSERT we return inserted data, not result.data
-          const insertedItem = { ...item, id: result.insertId };
+          // For INSERT we return inserted data, preserving caller-provided ids.
+          const insertedItem = { ...item, id: item.id ?? result.insertId };
           results.push(insertedItem as T);
         }
         return results;
@@ -287,8 +287,8 @@ export class SqlDataSource<T> implements Source<T> {
           onDuplicateKeyUpdate: options?.hint?.onDuplicateKeyUpdate
         });
         const result = await this.query(insertQuery.sql, insertQuery.params, options);
-        // For INSERT we return inserted data, not result.data
-        return [{ ...data, id: result.insertId } as T];
+        // For INSERT we return inserted data, preserving caller-provided ids.
+        return [{ ...data, id: data.id ?? result.insertId } as T];
       }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);

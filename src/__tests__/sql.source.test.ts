@@ -342,6 +342,60 @@ describe('SqlDataSource', () => {
       });
       expect(result).toEqual([{ id: 1, name: 'test' }]);
     });
+
+    it('should preserve caller-provided id when inserting document', async () => {
+      const data = { id: 'user_123', name: 'test' };
+      const mockQuery = { sql: 'INSERT INTO test_collection (id, name) VALUES (?, ?)', params: ['user_123', 'test'] };
+      mockQueryFactory.buildInsertQuery.mockReturnValue(mockQuery);
+
+      const mockResult = {
+        rows: [],
+        rowCount: 1,
+        affectedRows: 1,
+        insertId: 42
+      };
+      mockSoapSql.query.mockResolvedValue(mockResult);
+
+      const result = await dataSource.insert({
+        collection: 'test_collection',
+        data
+      });
+
+      expect(result).toEqual([{ id: 'user_123', name: 'test' }]);
+    });
+
+    it('should preserve caller-provided ids when inserting multiple documents', async () => {
+      const data = [
+        { id: 'user_123', name: 'first' },
+        { id: 'user_456', name: 'second' }
+      ];
+      const mockQuery = { sql: 'INSERT INTO test_collection (id, name) VALUES (?, ?)', params: [] };
+      mockQueryFactory.buildInsertQuery.mockReturnValue(mockQuery);
+
+      mockSoapSql.query
+        .mockResolvedValueOnce({
+          rows: [],
+          rowCount: 1,
+          affectedRows: 1,
+          insertId: 42
+        })
+        .mockResolvedValueOnce({
+          rows: [],
+          rowCount: 1,
+          affectedRows: 1,
+          insertId: 43
+        });
+
+      const result = await dataSource.insert({
+        collection: 'test_collection',
+        data
+      });
+
+      expect(result).toEqual([
+        { id: 'user_123', name: 'first' },
+        { id: 'user_456', name: 'second' }
+      ]);
+    });
   });
 
   describe('update', () => {
