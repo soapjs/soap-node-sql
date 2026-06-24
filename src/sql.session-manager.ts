@@ -1,9 +1,13 @@
 import { PoolConnection } from 'mysql2/promise';
 import { PoolClient } from 'pg';
-import { DatabaseSessionRegistry, DatabaseSession } from '@soapjs/soap';
-import { SqlSession } from './sql.session';
-import { SqlTransactionScope } from './sql.transaction-scope';
+import { DatabaseSessionRegistry, DatabaseSession, TransactionScope } from '@soapjs/soap';
+import { SqlConnectionProvider, SqlDatabaseType, SqlSession } from './sql.session';
 import { SqlConnectionError } from './sql.errors';
+
+export type SqlSessionManagerOptions = {
+  connectionProvider?: SqlConnectionProvider;
+  databaseType?: SqlDatabaseType;
+};
 
 /**
  * SQL database session registry implementation
@@ -14,14 +18,26 @@ export { SqlSession } from './sql.session';
 export class SqlSessionManager implements DatabaseSessionRegistry {
   private sessions: Map<string, SqlSession> = new Map();
   private readonly sessionTimeout = 300000; // 5 minutes
-  public readonly transactionScope: any;
+  public readonly transactionScope: TransactionScope;
+  private connectionProvider?: SqlConnectionProvider;
+  private databaseType?: SqlDatabaseType;
   private cleanupInterval?: NodeJS.Timeout;
 
-  constructor() {
-    this.transactionScope = SqlTransactionScope.getInstance();
+  constructor(options?: SqlSessionManagerOptions) {
+    this.transactionScope = TransactionScope.getInstance();
+    this.connectionProvider = options?.connectionProvider;
+    this.databaseType = options?.databaseType;
     
     // Clean up expired sessions every minute
-    this.cleanupInterval = setInterval(() => this.cleanupExpiredSessions(), 60000);
+    this.cleanupInterval = setInterval(() => {
+      void this.cleanupExpiredSessions();
+    }, 60000);
+    this.cleanupInterval.unref?.();
+  }
+
+  configure(options: SqlSessionManagerOptions): void {
+    this.connectionProvider = options.connectionProvider;
+    this.databaseType = options.databaseType;
   }
 
   /**
@@ -30,12 +46,30 @@ export class SqlSessionManager implements DatabaseSessionRegistry {
    * @returns A new DatabaseSession instance
    */
   createSession(...args: unknown[]): DatabaseSession {
+    if (typeof args[0] === 'string') {
+      const sessionId = args[0];
+      const existingSession = this.sessions.get(sessionId);
+      if (existingSession) {
+        existingSession.updateLastUsed();
+        return existingSession;
+      }
+
+      if (!this.connectionProvider || !this.databaseType) {
+        throw new SqlConnectionError('createSession requires a configured connection provider for transaction sessions');
+      }
+
+      const session = new SqlSession(sessionId, undefined, this.databaseType, this.connectionProvider);
+      this.sessions.set(sessionId, session);
+      return session;
+    }
+
     if (args.length < 2) {
       throw new SqlConnectionError('createSession requires connection and databaseType arguments');
     }
 
     const connection = args[0] as PoolConnection | PoolClient;
-    const databaseType = args[1] as 'mysql' | 'postgresql' | 'sqlite';
+    const databaseType = args[1] as SqlDatabaseType;
+    const requestedSessionId = typeof args[2] === 'string' ? args[2] : undefined;
 
     if (!connection) {
       throw new SqlConnectionError('Connection is required');
@@ -45,7 +79,13 @@ export class SqlSessionManager implements DatabaseSessionRegistry {
       throw new SqlConnectionError('databaseType must be "mysql", "postgresql", or "sqlite"');
     }
 
-    const sessionId = this.generateSessionId();
+    const sessionId = requestedSessionId || this.generateSessionId();
+    const existingSession = this.sessions.get(sessionId);
+    if (existingSession) {
+      existingSession.updateLastUsed();
+      return existingSession;
+    }
+
     const session = new SqlSession(sessionId, connection, databaseType);
     
     this.sessions.set(sessionId, session);
@@ -75,19 +115,29 @@ export class SqlSessionManager implements DatabaseSessionRegistry {
     return this.sessions.has(id);
   }
 
+  getCurrentTransactionSession(): SqlSession | undefined {
+    const transactionId = this.transactionScope.getTransactionId();
+    if (!transactionId) {
+      return undefined;
+    }
+
+    return this.getSession(transactionId) as SqlSession | undefined;
+  }
+
   /**
    * Deletes a session by ID
    * @param id - The session ID
    * @param args - Additional arguments (not used)
    */
-  deleteSession(id: string, ...args: unknown[]): void {
+  async deleteSession(id: string, ...args: unknown[]): Promise<void> {
     const session = this.sessions.get(id);
-    if (session) {
-      // End the session to release the connection
-      session.end().catch(error => {
-        console.error(`Error ending session ${id}:`, error);
-      });
-      
+    if (!session) {
+      return;
+    }
+
+    try {
+      await session.end();
+    } finally {
       this.sessions.delete(id);
     }
   }
@@ -100,7 +150,7 @@ export class SqlSessionManager implements DatabaseSessionRegistry {
   removeSession(sessionId: string): boolean {
     const session = this.sessions.get(sessionId);
     if (session) {
-      this.deleteSession(sessionId);
+      void this.deleteSession(sessionId);
       return true;
     }
     return false;
@@ -125,7 +175,7 @@ export class SqlSessionManager implements DatabaseSessionRegistry {
   /**
    * Cleans up expired sessions
    */
-  private cleanupExpiredSessions(): void {
+  private async cleanupExpiredSessions(): Promise<void> {
     const now = new Date();
     const expiredSessions: string[] = [];
 
@@ -136,7 +186,7 @@ export class SqlSessionManager implements DatabaseSessionRegistry {
     }
 
     for (const sessionId of expiredSessions) {
-      this.deleteSession(sessionId);
+      await this.deleteSession(sessionId);
     }
 
     if (expiredSessions.length > 0) {
@@ -166,17 +216,7 @@ export class SqlSessionManager implements DatabaseSessionRegistry {
 
     const sessionIds = Array.from(this.sessions.keys());
     
-    await Promise.all(
-      sessionIds.map(async (sessionId) => {
-        try {
-          await this.sessions.get(sessionId)?.end();
-        } catch (error) {
-          console.error(`Error closing session ${sessionId}:`, error);
-        }
-      })
-    );
-
-    this.sessions.clear();
+    await Promise.all(sessionIds.map(sessionId => this.deleteSession(sessionId)));
   }
 
   /**

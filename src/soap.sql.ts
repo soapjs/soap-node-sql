@@ -88,6 +88,11 @@ export class SoapSQL {
       } else {
         throw new Error(`Unsupported database type: ${config.type}`);
       }
+
+      this._sessions.configure({
+        connectionProvider: () => this.getConnection(),
+        databaseType: config.type
+      });
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       throw new SqlConnectionError(`Failed to initialize SQL connection: ${errorMessage}`, error instanceof Error ? error : undefined);

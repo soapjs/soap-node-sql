@@ -116,7 +116,13 @@ export class SqlDataSource<T> implements Source<T> {
   async query(sql: string, params?: any[], options?: QueryOptions): Promise<QueryResult> {
     const startTime = Date.now();
     try {
-      const result = await this._soapSql.query(sql, params);
+      const transactionSession =
+        typeof (this._sessionManager as any).getCurrentTransactionSession === 'function'
+          ? this._sessionManager.getCurrentTransactionSession()
+          : undefined;
+      const result = transactionSession
+        ? await transactionSession.executeQuery(sql, params)
+        : await this._soapSql.query(sql, params);
       const queryResult = {
         data: result.rows || result || [],
         count: result.rowCount || result.affectedRows || 0,

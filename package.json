@@ -1,6 +1,6 @@
 {
   "name": "@soapjs/soap-sql",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Seamless SQL integration for SoapJS projects, facilitating clean architecture practices and streamlined database interactions.",
   "homepage": "https://docs.soapjs.com",
   "repository": "https://github.com/soapjs/soap-sql",
@@ -44,7 +44,7 @@
     "typescript": "^4.8.2"
   },
   "peerDependencies": {
-    "@soapjs/soap": "^0.14.0",
+    "@soapjs/soap": "^0.14.3",
     "mysql2": "*",
     "pg": "*",
     "sqlite3": "*"
